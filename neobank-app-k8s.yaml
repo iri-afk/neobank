@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: neobank
+  namespace: neobank
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: neobank
+  template:
+    metadata:
+      labels:
+        app: neobank
+    spec:
+      containers:
+        - name: neobank
+          image: docker.io/library/neobank:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 5000
+          env:
+            - name: HOST
+              value: "0.0.0.0"
+            - name: PORT
+              value: "5000"
+            - name: DATABASE_URL
+              value: "postgresql://neobank:neobank123@postgres:5432/neobank"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: neobank
+  namespace: neobank
+spec:
+  selector:
+    app: neobank
+  ports:
+    - port: 5000
+      targetPort: 5000
