@@ -1,0 +1,31 @@
+name: Deploy NeoBank
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Build da imagem Docker
+        run: docker build -t neobank:latest .
+
+      - name: Salvar imagem em tar
+        run: docker save neobank:latest -o /tmp/neobank.tar
+
+      - name: Importar imagem no containerd do k3s
+        run: sudo k3s ctr images import /tmp/neobank.tar
+
+      - name: Aplicar manifesto no k3s
+        run: sudo kubectl apply -f neobank-app-k8s.yaml
+
+      - name: Reiniciar deployment (força novo pod com a imagem atualizada)
+        run: sudo kubectl rollout restart deployment/neobank -n neobank
+
+      - name: Aguardar rollout completar
+        run: sudo kubectl rollout status deployment/neobank -n neobank --timeout=60s
