@@ -22,10 +22,10 @@ jobs:
         run: sudo k3s ctr images import /tmp/neobank.tar
 
       - name: Aplicar manifesto no k3s
-        run: sudo kubectl apply -f neobank-app-k8s.yaml
+        run: sudo kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml apply -f neobank-app-k8s.yaml
 
       - name: Reiniciar deployment (força novo pod com a imagem atualizada)
-        run: sudo kubectl rollout restart deployment/neobank -n neobank
+        run: sudo kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml rollout restart deployment/neobank -n neobank
 
       - name: Aguardar rollout completar
-        run: sudo kubectl rollout status deployment/neobank -n neobank --timeout=60s
+        run: sudo kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml rollout status deployment/neobank -n neobank --timeout=60s
