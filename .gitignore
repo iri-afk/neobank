@@ -9,3 +9,4 @@ build/
 *.db
 coverage/
 .vscode/
+neobank.tar

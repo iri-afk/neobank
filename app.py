@@ -3,7 +3,8 @@ NeoBank - Sistema Bancário Completo com IA
 Backend: Flask + SQLite
 """
 
-import sqlite3
+import psycopg2
+import psycopg2.extras
 import hashlib
 import hmac
 import secrets
@@ -16,16 +17,71 @@ import re
 
 app = Flask(__name__, static_folder='static')
 DB_PATH = os.path.join(os.path.dirname(__file__), 'banco.db')
+DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://neobank:neobank123@localhost:5432/neobank')
 
 # ─────────────────────────────────────────────
 # DATABASE SETUP
 # ─────────────────────────────────────────────
 
+class PGCursor:
+    """Imita o cursor do sqlite3: troca ? por %s automaticamente."""
+    def __init__(self, cur):
+        self._cur = cur
+
+    def execute(self, query, params=()):
+        import re
+        m = re.match(r"PRAGMA table_info\((\w+)\)", query.strip())
+        if m:
+            table = m.group(1)
+            query = (
+                "SELECT column_name AS name FROM information_schema.columns "
+                "WHERE table_name = %s AND table_schema = 'public'"
+            )
+            params = (table,)
+            self._cur.execute(query, params)
+            return self
+        self._cur.execute(query.replace('?', '%s'), params)
+        return self
+
+    def executescript(self, script):
+        """Imita executescript do sqlite3: roda cada CREATE TABLE separado."""
+        for stmt in script.split(';'):
+            stmt = stmt.strip()
+            if stmt:
+                self._cur.execute(stmt)
+        return self
+
+    def fetchone(self):
+        return self._cur.fetchone()
+
+    def fetchall(self):
+        return self._cur.fetchall()
+
+class PGConn:
+    """Imita a conexão do sqlite3: permite conn.execute() direto."""
+    def __init__(self, conn):
+        self._conn = conn
+
+    def cursor(self):
+        return PGCursor(self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor))
+
+    def execute(self, query, params=()):
+        c = self.cursor()
+        c.execute(query, params)
+        return c
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
+
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    conn = psycopg2.connect(DATABASE_URL)
+    return PGConn(conn)
 
 def init_db():
     conn = get_db()
@@ -33,19 +89,19 @@ def init_db():
 
     c.executescript("""
     CREATE TABLE IF NOT EXISTS usuarios (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        id          SERIAL PRIMARY KEY,
         cpf         TEXT UNIQUE NOT NULL,
         nome        TEXT NOT NULL,
         email       TEXT UNIQUE NOT NULL,
         telefone    TEXT,
         senha_hash  TEXT NOT NULL,
         salt        TEXT NOT NULL,
-        criado_em   TEXT DEFAULT (datetime('now')),
+        criado_em   TEXT DEFAULT NOW()::text,
         ativo       INTEGER DEFAULT 1
     );
 
     CREATE TABLE IF NOT EXISTS contas (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        id              SERIAL PRIMARY KEY,
         usuario_id      INTEGER NOT NULL REFERENCES usuarios(id),
         numero          TEXT UNIQUE NOT NULL,
         agencia         TEXT NOT NULL DEFAULT '0001',
@@ -53,11 +109,11 @@ def init_db():
         saldo           REAL NOT NULL DEFAULT 0.0,
         limite_cheque   REAL NOT NULL DEFAULT 0.0,
         status          TEXT NOT NULL DEFAULT 'ativa',
-        criado_em       TEXT DEFAULT (datetime('now'))
+        criado_em       TEXT DEFAULT NOW()::text
     );
 
     CREATE TABLE IF NOT EXISTS transacoes (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        id              SERIAL PRIMARY KEY,
         conta_origem    INTEGER REFERENCES contas(id),
         conta_destino   INTEGER REFERENCES contas(id),
         tipo            TEXT NOT NULL,
@@ -66,12 +122,12 @@ def init_db():
         status          TEXT NOT NULL DEFAULT 'concluida',
         saldo_anterior  REAL,
         saldo_posterior REAL,
-        criado_em       TEXT DEFAULT (datetime('now')),
+        criado_em       TEXT DEFAULT NOW()::text,
         codigo          TEXT UNIQUE
     );
 
     CREATE TABLE IF NOT EXISTS ledger_lancamentos (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        id              SERIAL PRIMARY KEY,
         conta_id        INTEGER NOT NULL REFERENCES contas(id),
         transacao_codigo TEXT,
         tipo            TEXT NOT NULL,
@@ -80,11 +136,11 @@ def init_db():
         saldo_antes     REAL NOT NULL,
         saldo_depois    REAL NOT NULL,
         descricao       TEXT,
-        criado_em       TEXT DEFAULT (datetime('now'))
+        criado_em       TEXT DEFAULT NOW()::text
     );
 
     CREATE TABLE IF NOT EXISTS cartoes (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        id              SERIAL PRIMARY KEY,
         conta_id        INTEGER NOT NULL REFERENCES contas(id),
         numero          TEXT UNIQUE NOT NULL,
         cvv             TEXT NOT NULL,
@@ -93,20 +149,20 @@ def init_db():
         limite          REAL DEFAULT 0.0,
         limite_usado    REAL DEFAULT 0.0,
         status          TEXT NOT NULL DEFAULT 'ativo',
-        criado_em       TEXT DEFAULT (datetime('now'))
+        criado_em       TEXT DEFAULT NOW()::text
     );
 
     CREATE TABLE IF NOT EXISTS pix_chaves (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        id          SERIAL PRIMARY KEY,
         conta_id    INTEGER NOT NULL REFERENCES contas(id),
         tipo        TEXT NOT NULL,
         chave       TEXT UNIQUE NOT NULL,
         ativa       INTEGER DEFAULT 1,
-        criado_em   TEXT DEFAULT (datetime('now'))
+        criado_em   TEXT DEFAULT NOW()::text
     );
 
     CREATE TABLE IF NOT EXISTS emprestimos (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        id              SERIAL PRIMARY KEY,
         conta_id        INTEGER NOT NULL REFERENCES contas(id),
         valor           REAL NOT NULL,
         juros_mensal    REAL NOT NULL,
@@ -114,11 +170,11 @@ def init_db():
         parcelas_pagas  INTEGER DEFAULT 0,
         valor_parcela   REAL NOT NULL,
         status          TEXT DEFAULT 'ativo',
-        criado_em       TEXT DEFAULT (datetime('now'))
+        criado_em       TEXT DEFAULT NOW()::text
     );
 
     CREATE TABLE IF NOT EXISTS investimentos (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        id              SERIAL PRIMARY KEY,
         conta_id        INTEGER NOT NULL REFERENCES contas(id),
         tipo            TEXT NOT NULL,
         valor_inicial   REAL NOT NULL,
@@ -126,11 +182,11 @@ def init_db():
         taxa_anual      REAL NOT NULL,
         data_vencimento TEXT,
         status          TEXT DEFAULT 'ativo',
-        criado_em       TEXT DEFAULT (datetime('now'))
+        criado_em       TEXT DEFAULT NOW()::text
     );
 
     CREATE TABLE IF NOT EXISTS dividas (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        id              SERIAL PRIMARY KEY,
         conta_id        INTEGER NOT NULL REFERENCES contas(id),
         descricao       TEXT NOT NULL,
         categoria       TEXT DEFAULT 'geral',
@@ -143,33 +199,33 @@ def init_db():
         juros_mensal    REAL NOT NULL DEFAULT 0.0,
         vencimento      TEXT,
         status          TEXT DEFAULT 'ativa',
-        criado_em       TEXT DEFAULT (datetime('now'))
+        criado_em       TEXT DEFAULT NOW()::text
     );
 
     CREATE TABLE IF NOT EXISTS gastos_categorias (
-        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        id                  SERIAL PRIMARY KEY,
         conta_id            INTEGER NOT NULL REFERENCES contas(id),
         tipo_movimento      TEXT NOT NULL,
         categoria           TEXT NOT NULL DEFAULT 'geral',
         descricao           TEXT NOT NULL,
         valor               REAL NOT NULL,
         transacao_codigo    TEXT,
-        criado_em           TEXT DEFAULT (datetime('now')),
+        criado_em           TEXT DEFAULT NOW()::text,
         atualizado_em       TEXT
     );
 
     CREATE TABLE IF NOT EXISTS orcamentos_categorias (
-        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        id                  SERIAL PRIMARY KEY,
         conta_id            INTEGER NOT NULL REFERENCES contas(id),
         categoria           TEXT NOT NULL,
         limite_mensal       REAL NOT NULL,
         mes_ref             TEXT NOT NULL,
-        criado_em           TEXT DEFAULT (datetime('now')),
+        criado_em           TEXT DEFAULT NOW()::text,
         UNIQUE(conta_id, categoria, mes_ref)
     );
 
     CREATE TABLE IF NOT EXISTS desafios_otp (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        id              SERIAL PRIMARY KEY,
         usuario_id       INTEGER NOT NULL REFERENCES usuarios(id),
         acao            TEXT NOT NULL,
         codigo_hash     TEXT NOT NULL,
@@ -178,11 +234,11 @@ def init_db():
         tentativas      INTEGER DEFAULT 0,
         max_tentativas  INTEGER DEFAULT 5,
         usado           INTEGER DEFAULT 0,
-        criado_em       TEXT DEFAULT (datetime('now'))
+        criado_em       TEXT DEFAULT NOW()::text
     );
 
     CREATE TABLE IF NOT EXISTS pix_agendamentos (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        id              SERIAL PRIMARY KEY,
         usuario_id      INTEGER NOT NULL REFERENCES usuarios(id),
         conta_id        INTEGER NOT NULL REFERENCES contas(id),
         chave           TEXT NOT NULL,
@@ -192,22 +248,22 @@ def init_db():
         status          TEXT DEFAULT 'pendente',
         codigo_transacao TEXT,
         erro            TEXT,
-        criado_em       TEXT DEFAULT (datetime('now')),
+        criado_em       TEXT DEFAULT NOW()::text,
         processado_em   TEXT
     );
 
     CREATE TABLE IF NOT EXISTS pix_devolucoes (
-        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        id                  SERIAL PRIMARY KEY,
         transacao_original  TEXT NOT NULL,
         transacao_devolucao TEXT NOT NULL,
         conta_origem        INTEGER NOT NULL REFERENCES contas(id),
         conta_destino       INTEGER NOT NULL REFERENCES contas(id),
         valor               REAL NOT NULL,
-        criado_em           TEXT DEFAULT (datetime('now'))
+        criado_em           TEXT DEFAULT NOW()::text
     );
 
     CREATE TABLE IF NOT EXISTS faturas_cartao (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        id              SERIAL PRIMARY KEY,
         cartao_id       INTEGER NOT NULL REFERENCES cartoes(id),
         mes_ref         TEXT NOT NULL,
         total_fatura    REAL NOT NULL DEFAULT 0.0,
@@ -216,12 +272,12 @@ def init_db():
         status          TEXT DEFAULT 'aberta',
         fechamento_em   TEXT,
         vencimento_em   TEXT,
-        criado_em       TEXT DEFAULT (datetime('now')),
+        criado_em       TEXT DEFAULT NOW()::text,
         UNIQUE(cartao_id, mes_ref)
     );
 
     CREATE TABLE IF NOT EXISTS compras_cartao (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        id              SERIAL PRIMARY KEY,
         cartao_id       INTEGER NOT NULL REFERENCES cartoes(id),
         fatura_id       INTEGER NOT NULL REFERENCES faturas_cartao(id),
         descricao       TEXT NOT NULL,
@@ -229,11 +285,11 @@ def init_db():
         parcelas        INTEGER NOT NULL DEFAULT 1,
         parcela_atual   INTEGER NOT NULL DEFAULT 1,
         status          TEXT DEFAULT 'ativa',
-        criado_em       TEXT DEFAULT (datetime('now'))
+        criado_em       TEXT DEFAULT NOW()::text
     );
 
     CREATE TABLE IF NOT EXISTS parcelas_compra_cartao (
-        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        id                  SERIAL PRIMARY KEY,
         compra_id            INTEGER NOT NULL REFERENCES compras_cartao(id),
         cartao_id            INTEGER NOT NULL REFERENCES cartoes(id),
         mes_ref              TEXT NOT NULL,
@@ -242,12 +298,12 @@ def init_db():
         valor_parcela        REAL NOT NULL,
         fatura_id            INTEGER REFERENCES faturas_cartao(id),
         status               TEXT DEFAULT 'pendente',
-        criado_em            TEXT DEFAULT (datetime('now')),
+        criado_em            TEXT DEFAULT NOW()::text,
         UNIQUE(compra_id, numero_parcela)
     );
 
     CREATE TABLE IF NOT EXISTS boletos (
-        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        id                  SERIAL PRIMARY KEY,
         conta_id            INTEGER NOT NULL REFERENCES contas(id),
         linha_digitavel     TEXT UNIQUE NOT NULL,
         descricao           TEXT NOT NULL,
@@ -260,11 +316,11 @@ def init_db():
         vencimento_em       TEXT NOT NULL,
         status              TEXT NOT NULL DEFAULT 'pendente',
         pago_em             TEXT,
-        criado_em           TEXT DEFAULT (datetime('now'))
+        criado_em           TEXT DEFAULT NOW()::text
     );
 
     CREATE TABLE IF NOT EXISTS automacao_config (
-        id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+        id                          SERIAL PRIMARY KEY,
         usuario_id                  INTEGER NOT NULL UNIQUE REFERENCES usuarios(id),
         sweep_ativo                 INTEGER NOT NULL DEFAULT 0,
         sweep_min_reserva           REAL NOT NULL DEFAULT 500.0,
@@ -275,27 +331,27 @@ def init_db():
         cenario_forcado             TEXT,
         dashboard_ordem_ativa       INTEGER NOT NULL DEFAULT 0,
         dashboard_ordem_widgets     TEXT,
-        atualizado_em               TEXT DEFAULT (datetime('now'))
+        atualizado_em               TEXT DEFAULT NOW()::text
     );
 
     CREATE TABLE IF NOT EXISTS reserva_liquidez (
-        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        id                  SERIAL PRIMARY KEY,
         usuario_id          INTEGER NOT NULL UNIQUE REFERENCES usuarios(id),
         saldo_reserva       REAL NOT NULL DEFAULT 0.0,
-        atualizado_em       TEXT DEFAULT (datetime('now'))
+        atualizado_em       TEXT DEFAULT NOW()::text
     );
 
     CREATE TABLE IF NOT EXISTS open_finance_fontes (
-        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        id                  SERIAL PRIMARY KEY,
         usuario_id          INTEGER NOT NULL REFERENCES usuarios(id),
         instituicao         TEXT NOT NULL,
         tipo                TEXT NOT NULL,
         saldo               REAL NOT NULL,
-        atualizado_em       TEXT DEFAULT (datetime('now'))
+        atualizado_em       TEXT DEFAULT NOW()::text
     );
 
     CREATE TABLE IF NOT EXISTS pagamentos_programaveis (
-        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        id                  SERIAL PRIMARY KEY,
         usuario_id          INTEGER NOT NULL REFERENCES usuarios(id),
         descricao           TEXT NOT NULL,
         destinatario        TEXT NOT NULL,
@@ -303,38 +359,38 @@ def init_db():
         condicao_tipo       TEXT NOT NULL,
         condicao_valor      TEXT NOT NULL,
         status              TEXT NOT NULL DEFAULT 'pendente',
-        criado_em           TEXT DEFAULT (datetime('now')),
+        criado_em           TEXT DEFAULT NOW()::text,
         executado_em        TEXT,
         codigo_transacao    TEXT
     );
 
     CREATE TABLE IF NOT EXISTS ai_agentes_tarefas (
-        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        id                  SERIAL PRIMARY KEY,
         usuario_id          INTEGER NOT NULL REFERENCES usuarios(id),
         tipo                TEXT NOT NULL,
         entrada_json        TEXT,
         resultado_json      TEXT,
         status              TEXT NOT NULL DEFAULT 'concluida',
-        criado_em           TEXT DEFAULT (datetime('now')),
-        finalizado_em       TEXT DEFAULT (datetime('now'))
+        criado_em           TEXT DEFAULT NOW()::text,
+        finalizado_em       TEXT DEFAULT NOW()::text
     );
 
     CREATE TABLE IF NOT EXISTS sessoes (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        id          SERIAL PRIMARY KEY,
         usuario_id  INTEGER NOT NULL REFERENCES usuarios(id),
         token       TEXT UNIQUE NOT NULL,
         expira_em   TEXT NOT NULL,
-        criado_em   TEXT DEFAULT (datetime('now'))
+        criado_em   TEXT DEFAULT NOW()::text
     );
 
     CREATE TABLE IF NOT EXISTS notificacoes (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        id          SERIAL PRIMARY KEY,
         usuario_id  INTEGER NOT NULL REFERENCES usuarios(id),
         titulo      TEXT NOT NULL,
         mensagem    TEXT NOT NULL,
         tipo        TEXT DEFAULT 'info',
         lida        INTEGER DEFAULT 0,
-        criado_em   TEXT DEFAULT (datetime('now'))
+        criado_em   TEXT DEFAULT NOW()::text
     );
     """)
     # Migração leve para bases já existentes.
@@ -352,12 +408,12 @@ def init_db():
 
     conn.execute(
         """CREATE TABLE IF NOT EXISTS orcamentos_categorias (
-               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               id SERIAL PRIMARY KEY,
                conta_id INTEGER NOT NULL REFERENCES contas(id),
                categoria TEXT NOT NULL,
                limite_mensal REAL NOT NULL,
                mes_ref TEXT NOT NULL,
-               criado_em TEXT DEFAULT (datetime('now')),
+               criado_em TEXT DEFAULT NOW()::text,
                UNIQUE(conta_id, categoria, mes_ref)
            )"""
     )
@@ -397,7 +453,7 @@ def verificar_token(token):
     row = conn.execute("""
         SELECT s.usuario_id, u.nome, u.email, u.cpf
         FROM sessoes s JOIN usuarios u ON s.usuario_id = u.id
-        WHERE s.token=? AND s.expira_em > datetime('now') AND u.ativo=1
+        WHERE s.token=? AND s.expira_em > NOW()::text AND u.ativo=1
     """, (token,)).fetchone()
     conn.close()
     return dict(row) if row else None
@@ -526,7 +582,7 @@ def criar_desafio_otp(conn, usuario_id, acao, ttl_min=5):
 def validar_desafio_otp(conn, usuario_id, acao, codigo):
     row = conn.execute(
         """SELECT * FROM desafios_otp
-           WHERE usuario_id=? AND acao=? AND usado=0 AND expira_em > datetime('now')
+           WHERE usuario_id=? AND acao=? AND usado=0 AND expira_em > NOW()::text
            ORDER BY id DESC LIMIT 1""",
         (usuario_id, acao)
     ).fetchone()
@@ -618,7 +674,7 @@ def processar_pix_agendamentos(conn, usuario_id=None):
     falhas = 0
     params = []
     query = """SELECT * FROM pix_agendamentos
-               WHERE status='pendente' AND data_execucao <= datetime('now')"""
+               WHERE status='pendente' AND data_execucao <= NOW()::text"""
     if usuario_id is not None:
         query += " AND usuario_id=?"
         params.append(usuario_id)
@@ -670,7 +726,7 @@ def processar_pix_agendamentos(conn, usuario_id=None):
 
             conn.execute(
                 """UPDATE pix_agendamentos
-                   SET status='executado', codigo_transacao=?, processado_em=datetime('now')
+                   SET status='executado', codigo_transacao=?, processado_em=NOW()::text
                    WHERE id=?""",
                 (codigo, ag['id'])
             )
@@ -679,7 +735,7 @@ def processar_pix_agendamentos(conn, usuario_id=None):
         except Exception as e:
             conn.execute(
                 """UPDATE pix_agendamentos
-                   SET status='erro', erro=?, processado_em=datetime('now')
+                   SET status='erro', erro=?, processado_em=NOW()::text
                    WHERE id=?""",
                 (str(e), ag['id'])
             )
@@ -889,7 +945,7 @@ def executar_prevencao_descoberto(conn, usuario_id):
     novo_reserva = float(reserva['saldo_reserva']) - necessidade
     codigo = gerar_codigo_transacao()
     conn.execute("UPDATE contas SET saldo=? WHERE id=?", (novo_saldo, conta['id']))
-    conn.execute("UPDATE reserva_liquidez SET saldo_reserva=?, atualizado_em=datetime('now') WHERE usuario_id=?", (novo_reserva, usuario_id))
+    conn.execute("UPDATE reserva_liquidez SET saldo_reserva=?, atualizado_em=NOW()::text WHERE usuario_id=?", (novo_reserva, usuario_id))
     conn.execute(
         """INSERT INTO transacoes (conta_destino, tipo, valor, descricao, saldo_anterior, saldo_posterior, codigo)
            VALUES (?,?,?,?,?,?,?)""",
@@ -990,7 +1046,7 @@ def processar_pagamentos_programaveis(conn, usuario_id=None):
             (conta['id'], 'pagamento_programavel', valor, row['descricao'], conta['saldo'], saldo_novo, codigo)
         )
         conn.execute(
-            "UPDATE pagamentos_programaveis SET status='executado', executado_em=datetime('now'), codigo_transacao=? WHERE id=?",
+            "UPDATE pagamentos_programaveis SET status='executado', executado_em=NOW()::text, codigo_transacao=? WHERE id=?",
             (codigo, row['id'])
         )
         registrar_lancamento(
@@ -1080,8 +1136,8 @@ def garantir_conta_demo():
     conn = get_db()
     try:
         senha_hash, salt = hash_senha('demo123')
-        conn.execute("""INSERT OR IGNORE INTO usuarios (cpf, nome, email, telefone, senha_hash, salt, ativo)
-                        VALUES (?,?,?,?,?,?,1)""",
+        conn.execute("""INSERT INTO usuarios (cpf, nome, email, telefone, senha_hash, salt, ativo)
+                        VALUES (?,?,?,?,?,?,1) ON CONFLICT (cpf) DO NOTHING""",
                      ('12345678901', 'Usuário Demo', 'demo@neobank.com', '11999999999', senha_hash, salt))
 
         user = conn.execute("SELECT id FROM usuarios WHERE email=?", ('demo@neobank.com',)).fetchone()
@@ -1099,8 +1155,8 @@ def garantir_conta_demo():
                 numero = gerar_numero_conta()
             c = conn.cursor()
             c.execute("""INSERT INTO contas (usuario_id, numero, tipo, saldo, limite_cheque)
-                         VALUES (?,?,'corrente', 1000.0, 500.0)""", (uid, numero))
-            conta_id = c.lastrowid
+                         VALUES (?,?,'corrente', 1000.0, 500.0) RETURNING id""", (uid, numero))
+            conta_id = c.fetchone()['id']
             c.execute("""INSERT INTO transacoes (conta_destino, tipo, valor, descricao, saldo_anterior, saldo_posterior, codigo)
                          VALUES (?,?,?,?,?,?,?)""",
                       (conta_id, 'deposito', 1000.0, 'Saldo inicial da conta demo', 0.0, 1000.0, gerar_codigo_transacao()))
@@ -1153,9 +1209,9 @@ def cadastro():
     try:
         c = conn.cursor()
         c.execute("""INSERT INTO usuarios (cpf, nome, email, telefone, senha_hash, salt)
-                     VALUES (?,?,?,?,?,?)""",
+                     VALUES (?,?,?,?,?,?) RETURNING id""",
                   (cpf, d['nome'], d['email'], d.get('telefone', ''), senha_hash, salt))
-        uid = c.lastrowid
+        uid = c.fetchone()['id']
 
         # Criar conta corrente
         numero = gerar_numero_conta()
@@ -1163,8 +1219,8 @@ def cadastro():
             numero = gerar_numero_conta()
 
         c.execute("""INSERT INTO contas (usuario_id, numero, tipo, saldo, limite_cheque)
-                     VALUES (?,?,'corrente', 0.0, 500.0)""", (uid, numero))
-        conta_id = c.lastrowid
+                     VALUES (?,?,'corrente', 0.0, 500.0) RETURNING id""", (uid, numero))
+        conta_id = c.fetchone()['id']
 
         # Criar cartão de débito
         num_cartao = gerar_numero_cartao()
@@ -1551,7 +1607,7 @@ def pix_agendamento_cancelar(agendamento_id):
         if row['status'] != 'pendente':
             return jsonify({'erro': 'Apenas agendamentos pendentes podem ser cancelados'}), 400
 
-        conn.execute("UPDATE pix_agendamentos SET status='cancelado', processado_em=datetime('now') WHERE id=?", (agendamento_id,))
+        conn.execute("UPDATE pix_agendamentos SET status='cancelado', processado_em=NOW()::text WHERE id=?", (agendamento_id,))
         conn.commit()
         return jsonify({'mensagem': 'Agendamento cancelado'})
     finally:
@@ -1677,7 +1733,7 @@ def automacao_config():
             """UPDATE automacao_config
                SET sweep_ativo=?, sweep_min_reserva=?, sweep_percentual_excesso=?,
                    prevencao_descoberto_ativa=?, limite_alerta=?, tom_comunicacao=?, cenario_forcado=?,
-                   dashboard_ordem_ativa=?, dashboard_ordem_widgets=?, atualizado_em=datetime('now')
+                   dashboard_ordem_ativa=?, dashboard_ordem_widgets=?, atualizado_em=NOW()::text
                WHERE usuario_id=?""",
             (sweep_ativo, sweep_min, sweep_pct, prev_ativo, limite_alerta, tom, cenario_forcado, ordem_ativa, ordem_json, uid)
         )
@@ -1726,7 +1782,7 @@ def automacao_reserva():
             return jsonify({'erro': 'Ação inválida. Use depositar ou resgatar'}), 400
 
         conn.execute("UPDATE contas SET saldo=? WHERE id=?", (saldo, conta['id']))
-        conn.execute("UPDATE reserva_liquidez SET saldo_reserva=?, atualizado_em=datetime('now') WHERE usuario_id=?", (saldo_reserva, uid))
+        conn.execute("UPDATE reserva_liquidez SET saldo_reserva=?, atualizado_em=NOW()::text WHERE usuario_id=?", (saldo_reserva, uid))
         conn.commit()
         return jsonify({'mensagem': 'Reserva atualizada', 'saldo_conta': round(saldo, 2), 'saldo_reserva': round(saldo_reserva, 2)})
     finally:
@@ -1796,7 +1852,7 @@ def openfinance_fontes():
             return jsonify({'erro': 'instituicao e tipo são obrigatórios'}), 400
 
         conn.execute(
-            "INSERT INTO open_finance_fontes (usuario_id, instituicao, tipo, saldo, atualizado_em) VALUES (?,?,?,?,datetime('now'))",
+            "INSERT INTO open_finance_fontes (usuario_id, instituicao, tipo, saldo, atualizado_em) VALUES (?,?,?,?,NOW()::text)",
             (uid, instituicao, tipo, saldo)
         )
         conn.commit()
@@ -2053,7 +2109,7 @@ def pagar_boleto(boleto_id):
 
         codigo = gerar_codigo_transacao()
         conn.execute("UPDATE contas SET saldo = saldo - ? WHERE id=?", (valor, conta['id']))
-        conn.execute("UPDATE boletos SET status='pago', pago_em=datetime('now') WHERE id=?", (boleto_id,))
+        conn.execute("UPDATE boletos SET status='pago', pago_em=NOW()::text WHERE id=?", (boleto_id,))
         conn.execute(
             """INSERT INTO transacoes (conta_origem, tipo, valor, descricao, saldo_anterior, saldo_posterior, codigo)
                VALUES (?,?,?,?,?,?,?)""",
@@ -3094,7 +3150,7 @@ def gastos_categorizados():
         conn.execute(
                 """INSERT INTO gastos_categorias
                     (conta_id, tipo_movimento, categoria, descricao, valor, transacao_codigo, atualizado_em)
-                    VALUES (?,?,?,?,?,?,datetime('now'))""",
+                    VALUES (?,?,?,?,?,?,NOW()::text)""",
                 (conta['id'], tipo_movimento, categoria, descricao, valor, codigo)
         )
 
@@ -3180,7 +3236,7 @@ def gastos_categorizados_item(gasto_id):
         conn.execute("UPDATE contas SET saldo=? WHERE id=?", (saldo_final, conta['id']))
         conn.execute(
             """UPDATE gastos_categorias
-               SET tipo_movimento=?, categoria=?, descricao=?, valor=?, atualizado_em=datetime('now')
+               SET tipo_movimento=?, categoria=?, descricao=?, valor=?, atualizado_em=NOW()::text
                WHERE id=? AND conta_id=?""",
             (tipo_novo, categoria_nova, descricao_nova, valor_novo, gasto_id, conta['id'])
         )
