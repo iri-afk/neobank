@@ -3429,7 +3429,7 @@ def dashboard():
     # Gastos por tipo (últimos 30 dias)
     gastos = conn.execute("""
         SELECT tipo, SUM(valor) as total FROM transacoes
-        WHERE conta_origem=? AND criado_em > NOW() - INTERVAL '30 days'
+        WHERE conta_origem=? AND criado_em::timestamp > NOW() - INTERVAL '30 days'
         GROUP BY tipo
     """, (cid,)).fetchall()
 
