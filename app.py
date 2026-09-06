@@ -515,7 +515,7 @@ def calcular_score_risco(conn, usuario_id):
 
     saidas = conn.execute(
         """SELECT COALESCE(AVG(valor),0) FROM transacoes
-           WHERE conta_origem=? AND criado_em > NOW() - INTERVAL '30 days'""",
+           WHERE conta_origem=? AND criado_em::timestamp > NOW() - INTERVAL '30 days'""",
         (cid,)
     ).fetchone()[0] or 0
 
