@@ -59,10 +59,10 @@ class PGCursor:
         return self
 
     def fetchone(self):
-        return self._cur.fetchone()
-
+        row = self._cur.fetchone()
+        return Row(row) if row is not None else None
     def fetchall(self):
-        return self._cur.fetchall()
+        return [Row(r) for r in self._cur.fetchall()]
 
 class PGConn:
     """Imita a conexão do sqlite3: permite conn.execute() direto."""
