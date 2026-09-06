@@ -3526,6 +3526,6 @@ if __name__ == '__main__':
     print("  📱 Abra no navegador para usar o sistema")
     print("="*50 + "\n")
     debug_mode = os.getenv('FLASK_DEBUG', '0') == '1'
-    host = os.getenv('HOST', '127.0.0.1')
+    host = os.getenv('HOST', '0.0.0.0')
     port = int(os.getenv('PORT', '5000'))
     app.run(debug=debug_mode, host=host, port=port)
