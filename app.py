@@ -3024,19 +3024,19 @@ def gastos_categorizados():
             mes_ref = datetime.now().strftime('%Y-%m')
             entradas_mes = conn.execute(
                 """SELECT COALESCE(SUM(valor), 0) FROM gastos_categorias
-                   WHERE conta_id=? AND tipo_movimento='entrada' AND criado_em >= ?""",
+                   WHERE conta_id=? AND tipo_movimento='entrada' AND criado_em::timestamp >= ?""",
                 (conta['id'], inicio_mes)
             ).fetchone()[0] or 0
             saidas_mes = conn.execute(
                 """SELECT COALESCE(SUM(valor), 0) FROM gastos_categorias
-                   WHERE conta_id=? AND tipo_movimento='saida' AND criado_em >= ?""",
+                   WHERE conta_id=? AND tipo_movimento='saida' AND criado_em::timestamp >= ?""",
                 (conta['id'], inicio_mes)
             ).fetchone()[0] or 0
 
             saidas_mes_categoria = conn.execute(
                 """SELECT categoria, COALESCE(SUM(valor), 0) AS total
                    FROM gastos_categorias
-                   WHERE conta_id=? AND tipo_movimento='saida' AND criado_em >= ?
+                   WHERE conta_id=? AND tipo_movimento='saida' AND criado_em::timestamp >= ?
                    GROUP BY categoria
                    ORDER BY total DESC""",
                 (conta['id'], inicio_mes)
@@ -3282,7 +3282,7 @@ def orcamentos_categorias():
             gastos = conn.execute(
                 """SELECT categoria, COALESCE(SUM(valor),0) AS total
                    FROM gastos_categorias
-                   WHERE conta_id=? AND tipo_movimento='saida' AND criado_em >= ?
+                   WHERE conta_id=? AND tipo_movimento='saida' AND criado_em::timestamp >= ?
                    GROUP BY categoria""",
                 (conta['id'], inicio_mes)
             ).fetchall()
@@ -3436,7 +3436,7 @@ def dashboard():
     # Entradas/Saídas mensais
     entradas = conn.execute("""
         SELECT SUM(valor) FROM transacoes
-        WHERE conta_destino=? AND criado_em > NOW() - INTERVAL '30 days'
+        WHERE conta_destino=? AND criado_em::timestamp > NOW() - INTERVAL '30 days'
         AND tipo NOT IN ('emprestimo')
     """, (cid,)).fetchone()[0] or 0
 
