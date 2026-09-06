@@ -47,6 +47,11 @@ class PGCursor:
             params = (table,)
             self._cur.execute(query, params)
             return self
+        import re as _re
+        query = _re.sub(r"date\('now'\)", "CURRENT_DATE", query)
+        query = _re.sub(r"date\('now',\s*\?\)", "(CURRENT_DATE + (?)::interval)", query)
+        query = _re.sub(r"date\('now',\s*'([+-]?\d+\s+\w+)'\)", r"(CURRENT_DATE + INTERVAL '\1')", query)
+        query = _re.sub(r"date\(([a-zA-Z_][a-zA-Z0-9_.]*)\)", r"(\1)::date", query)
         self._cur.execute(query.replace('?', '%s'), params)
         return self
 
@@ -539,7 +544,7 @@ def calcular_score_risco(conn, usuario_id):
              WHERE conta_origem=? AND conta_destino IS NOT NULL
              GROUP BY conta_destino
            ) x
-           WHERE primeiro > NOW() - INTERVAL '30 days'""",
+           WHERE primeiro::timestamp > NOW() - INTERVAL '30 days'""",
         (cid,)
     ).fetchone()[0] or 0
 
