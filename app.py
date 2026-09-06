@@ -521,7 +521,7 @@ def calcular_score_risco(conn, usuario_id):
 
     maior_saida = conn.execute(
         """SELECT COALESCE(MAX(valor),0) FROM transacoes
-           WHERE conta_origem=? AND criado_em > datetime('now', '-7 days')""",
+           WHERE conta_origem=? AND criado_em > NOW() - INTERVAL '30 days'""",
         (cid,)
     ).fetchone()[0] or 0
 
