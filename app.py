@@ -3436,13 +3436,13 @@ def dashboard():
     # Entradas/Saídas mensais
     entradas = conn.execute("""
         SELECT SUM(valor) FROM transacoes
-        WHERE conta_destino=? AND criado_em > datetime('now', '-30 days')
+        WHERE conta_destino=? AND criado_em > NOW() - INTERVAL '30 days'
         AND tipo NOT IN ('emprestimo')
     """, (cid,)).fetchone()[0] or 0
 
     saidas = conn.execute("""
         SELECT SUM(valor) FROM transacoes
-        WHERE conta_origem=? AND criado_em > datetime('now', '-30 days')
+        WHERE conta_origem=? AND criado_em > NOW() - INTERVAL '30 days'
     """, (cid,)).fetchone()[0] or 0
 
     # Investimentos
