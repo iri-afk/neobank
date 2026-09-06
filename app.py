@@ -532,7 +532,7 @@ def calcular_score_risco(conn, usuario_id):
              WHERE conta_origem=? AND conta_destino IS NOT NULL
              GROUP BY conta_destino
            ) x
-           WHERE primeiro > datetime('now', '-7 days')""",
+           WHERE primeiro > NOW() - INTERVAL '30 days'""",
         (cid,)
     ).fetchone()[0] or 0
 
