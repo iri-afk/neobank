@@ -3442,7 +3442,7 @@ def dashboard():
 
     saidas = conn.execute("""
         SELECT SUM(valor) FROM transacoes
-        WHERE conta_origem=? AND criado_em > NOW() - INTERVAL '30 days'
+        WHERE conta_origem=? AND criado_em::timestamp > NOW() - INTERVAL '30 days'
     """, (cid,)).fetchone()[0] or 0
 
     # Investimentos
