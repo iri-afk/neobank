@@ -23,6 +23,13 @@ DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://neobank:neobank123@localh
 # DATABASE SETUP
 # ─────────────────────────────────────────────
 
+class Row(dict):
+    """Permite acessar por indice numerico (como sqlite3) ou por nome de coluna."""
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return list(self.values())[key]
+        return dict.__getitem__(self, key)
+
 class PGCursor:
     """Imita o cursor do sqlite3: troca ? por %s automaticamente."""
     def __init__(self, cur):
